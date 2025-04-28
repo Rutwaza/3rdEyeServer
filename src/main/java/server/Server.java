@@ -3,22 +3,20 @@ package server;
 import javax.imageio.ImageIO;
 import javax.swing.*;
 import java.awt.*;
+import java.awt.event.*;
 import java.awt.image.BufferedImage;
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.text.SimpleDateFormat;
 import java.util.Date;
-import java.util.concurrent.ConcurrentHashMap;
 
 public class Server {
 
     private JFrame frame;
-    private JPanel clientsPanel;
+    private JTabbedPane tabbedPane;
     private JLabel statusLabel;
     private ServerSocket serverSocket;
-
-    private ConcurrentHashMap<String, ClientHandler> clientHandlers = new ConcurrentHashMap<>();
 
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> new Server().createAndShowGUI());
@@ -26,9 +24,9 @@ public class Server {
 
     public void createAndShowGUI() {
         frame = new JFrame("Screenshare Server");
-        clientsPanel = new JPanel();
-        clientsPanel.setLayout(new GridLayout(0, 1, 10, 10));
-        JScrollPane scrollPane = new JScrollPane(clientsPanel);
+        tabbedPane = new JTabbedPane();
+        tabbedPane.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT); // 📜 Scroll tabs if too many
+
         statusLabel = new JLabel("Status: Waiting to start");
 
         JButton startButton = new JButton("Start Server");
@@ -38,13 +36,29 @@ public class Server {
             }
         });
 
+        // Add right-click support on tabbedPane 🖱
+        tabbedPane.addMouseListener(new MouseAdapter() {
+            public void mousePressed(MouseEvent e) {
+                if (e.isPopupTrigger() || SwingUtilities.isRightMouseButton(e)) {
+                    int tabIndex = tabbedPane.indexAtLocation(e.getX(), e.getY());
+                    if (tabIndex != -1) {
+                        showTabPopup(e.getX(), e.getY(), tabIndex);
+                    }
+                }
+            }
+
+            public void mouseReleased(MouseEvent e) {
+                mousePressed(e); // handle both pressed and released
+            }
+        });
+
         JPanel topPanel = new JPanel(new BorderLayout());
         topPanel.add(startButton, BorderLayout.WEST);
         topPanel.add(statusLabel, BorderLayout.CENTER);
 
         frame.setLayout(new BorderLayout());
         frame.add(topPanel, BorderLayout.NORTH);
-        frame.add(scrollPane, BorderLayout.CENTER);
+        frame.add(tabbedPane, BorderLayout.CENTER);
 
         frame.setSize(1200, 700);
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -68,13 +82,25 @@ public class Server {
         }).start();
     }
 
+    private void showTabPopup(int x, int y, int tabIndex) {
+        JPopupMenu popup = new JPopupMenu();
+        JMenuItem closeItem = new JMenuItem("Close Tab");
+
+        closeItem.addActionListener(ev -> {
+            tabbedPane.removeTabAt(tabIndex);
+        });
+
+        popup.add(closeItem);
+        popup.show(tabbedPane, x, y);
+    }
+
     class ClientHandler extends Thread {
         private Socket socket;
         private JLabel imageLabel;
         private JLabel infoLabel;
-        private JPanel panel;
+        private JPanel clientPanel;
         private String nickname;
-        private String clientId;
+        private String clientTabTitle;
 
         public ClientHandler(Socket socket) {
             this.socket = socket;
@@ -84,23 +110,33 @@ public class Server {
             try {
                 InputStream is = socket.getInputStream();
                 DataInputStream dis = new DataInputStream(is);
-                nickname = dis.readUTF();
 
-                clientId = socket.getInetAddress().getHostAddress() + ":" + socket.getPort();
-                statusLabel.setText("Client connected: " + nickname);
+                nickname = dis.readUTF();
+                clientTabTitle = nickname + " (" + socket.getInetAddress().getHostAddress() + ")";
 
                 DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
                 dos.writeUTF("start_screenshare");
 
-                // Create panel for this client
+                // Create client panel
                 SwingUtilities.invokeLater(() -> {
-                    panel = new JPanel(new BorderLayout());
-                    imageLabel = new JLabel();
+                    clientPanel = new JPanel(new BorderLayout());
                     infoLabel = new JLabel();
-                    panel.add(infoLabel, BorderLayout.NORTH);
-                    panel.add(imageLabel, BorderLayout.CENTER);
-                    clientsPanel.add(panel);
+                    imageLabel = new JLabel();
+                    imageLabel.setHorizontalAlignment(SwingConstants.CENTER);
+
+                    clientPanel.add(infoLabel, BorderLayout.NORTH);
+                    clientPanel.add(new JScrollPane(imageLabel), BorderLayout.CENTER);
+                    tabbedPane.addTab(clientTabTitle, clientPanel);
                     frame.revalidate();
+                    frame.repaint();
+
+                    // 🔔 Show a live popup notification
+                    JOptionPane.showMessageDialog(frame,
+                            "New client connected:\n" +
+                                    "Nickname: " + nickname + "\n" +
+                                    "IP: " + socket.getInetAddress().getHostAddress(),
+                            "Client Connected",
+                            JOptionPane.INFORMATION_MESSAGE);
                 });
 
                 while (true) {
@@ -112,9 +148,9 @@ public class Server {
                     if (img != null) {
                         SwingUtilities.invokeLater(() -> {
                             imageLabel.setIcon(new ImageIcon(img));
-                            infoLabel.setText("IP: " + socket.getInetAddress().getHostAddress()
-                                    + " | Name: " + nickname
-                                    + " | Time: " + new SimpleDateFormat("HH:mm:ss").format(new Date()));
+                            infoLabel.setText("IP: " + socket.getInetAddress().getHostAddress() +
+                                    " | Name: " + nickname +
+                                    " | Time: " + new SimpleDateFormat("HH:mm:ss").format(new Date()));
                         });
                     }
                 }
@@ -123,7 +159,10 @@ public class Server {
                 System.err.println("Client disconnected: " + nickname);
             } finally {
                 SwingUtilities.invokeLater(() -> {
-                    clientsPanel.remove(panel);
+                    int index = tabbedPane.indexOfTab(clientTabTitle);
+                    if (index != -1) {
+                        tabbedPane.removeTabAt(index);
+                    }
                     frame.revalidate();
                     frame.repaint();
                 });
